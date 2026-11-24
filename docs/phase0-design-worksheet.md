@@ -21,7 +21,7 @@ My idea is to ship often, but make every release small, labelled, tested and eas
 
 ![Architecture diagram](architecture.png)
 
-The picture above is drawn from the file architecture.mmd in the same folder.
+The picture above is a copy of the diagram in architecture.md in the same folder, which also has a short note on how to read it.
 
 I split the app into three containers and each one has one job.
 
@@ -41,10 +41,10 @@ Why I did not put everything in one container:
 
 Networks:
 
-- frontend_net joins the frontend and the backend.
-- backend_net joins the backend and the db. I marked it internal, so Docker gives it no internet connection in either direction.
-- The backend is on both networks. The frontend and the db share no network, so they cannot talk to each other.
-- Only the frontend publishes a port, and only port 80. The public address is just http://VM-IP with nothing after it.
+- I made a network called frontend_net. It connects the frontend and the backend, so the frontend can pass the requests it receives on to the backend.
+- I made a second network called backend_net. It connects the backend and the db, so the backend can save and read the form entries. I marked it internal, which means Docker gives it no connection to the internet in either direction.
+- The backend is on both networks, but the frontend and the db do not share any network, so they cannot talk to each other. A request has to go through the backend to reach the data.
+- Of the three containers, only the frontend publishes a port, and it is only port 80. This is why the public address is just http://VM-IP with nothing after it.
 
 ## 2.2 Versioning and tagging strategy
 
