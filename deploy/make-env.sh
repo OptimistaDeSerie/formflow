@@ -40,5 +40,5 @@ HTTP_PORT=80
 ENV
 chmod 600 .env
 
-echo ".env written with permissions 600 (only you can read it)."
-echo "Save the database password in your private note. GitHub will need the same one later."
+echo ".env written with permissions 600 (readable only by this user)."
+echo "Keep the database password somewhere safe. The GitHub secret DB_PASSWORD must hold the same value."

@@ -6,8 +6,8 @@ These files put a tagged version of FormFlow on the VM and take it back if somet
 
 | File | Runs where | What it does |
 |---|---|---|
-| `../infra/provision-vm.sh` | Your computer | Checks your Azure subscription, then creates the resource group, the VM and opens port 80. Asks for `yes` before anything costs money. |
-| `../infra/delete-azure-resources.sh` | Your computer | Deletes the whole resource group so Azure stops charging. |
+| `../infra/provision-vm.sh` | Local machine | Checks your Azure subscription, then creates the resource group, the VM and opens port 80. Asks for `yes` before anything costs money. |
+| `../infra/delete-azure-resources.sh` | Local machine | Deletes the whole resource group so that Azure stops billing. |
 | `vm-setup.sh` | The VM, once | Installs Docker and creates `/opt/formflow`. |
 | `make-env.sh` | The VM, once | Writes the private `.env` file (permissions 600). Asks for the Docker ID and the database password, so the password never appears in a command. |
 | `env-sync.sh` | The VM, by the pipeline | Reads the database password from the pipeline (standard input, never a command line). Creates `.env` if there is none. If there is one, it only checks the password matches and never overwrites it. |

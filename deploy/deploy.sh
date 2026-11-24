@@ -49,7 +49,7 @@ if ! IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" pull; then
   exit 1
 fi
 
-# 2. Remember what we are leaving, then write the new tag into .env.
+# 2. Record the tag being replaced, then write the new tag into .env.
 if [[ "$CURRENT_TAG" =~ $TAG_RE ]] && [ "$CURRENT_TAG" != "$NEW_TAG" ]; then
   printf '%s\n' "$CURRENT_TAG" > previous_tag
 fi

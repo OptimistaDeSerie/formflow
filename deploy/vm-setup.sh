@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs ONCE on a fresh Ubuntu VM. Installs Docker and prepares /opt/formflow.
-# Usage from your computer (inside the formflow folder):
+# Usage, from the repository root on a local machine:
 #   scp deploy/vm-setup.sh azureuser@VM_IP:/tmp/vm-setup.sh
 #   ssh azureuser@VM_IP 'bash /tmp/vm-setup.sh'
 # Based on the official Docker instructions for Ubuntu (apt repository method).

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Creates the Azure resources for FormFlow: one resource group, one Linux VM, port 80 open.
-# Run it on your Mac, with the Azure CLI installed and logged in (az login).
+# Requires bash and the Azure CLI, already logged in (az login).
 #
 # How it stays safe:
-#   - Before creating anything it asks Azure itself ("az vm create --validate") whether your
-#     subscription may create each region and size in the list. That check includes your VM core
+#   - Before creating anything it asks Azure itself ("az vm create --validate") whether the
+#     subscription may create each region and size in the list. That check includes the VM core
 #     quota, and it creates nothing and costs nothing.
-#   - It asks you to type "yes" before the first thing that costs money is created.
+#   - It waits for a typed "yes" before the first resource that costs money is created.
 #
 # Optional overrides (all four have safe defaults). REGION and SIZE accept one name or several
 # names separated by spaces, which are tried in order:
 #   RG=formflow-rg   VM=formflow-vm   REGION="westus3 swedencentral"   SIZE=Standard_B2ats_v2
 set -euo pipefail
 
-# Quiet the harmless Python warnings that macOS prints, so the screen stays readable.
+# Suppress harmless Python warnings printed by the Azure CLI, so the output stays readable.
 export PYTHONWARNINGS=ignore
 export AZURE_CORE_ONLY_SHOW_ERRORS=true
 
@@ -65,8 +65,8 @@ flush_keyboard() {
 # Reads Azure's error text and sets KIND (and sometimes DETAIL):
 #   quota    this VM family has no (or too little) core quota in this region
 #   regional the total core quota of this region is used up
-#   sku      this size is not allowed for your subscription in this region
-#   region   this whole region is closed to your subscription (policy, or not accepting new customers)
+#   sku      this size is not allowed for the subscription in this region
+#   region   this whole region is closed to the subscription (policy, or not accepting new customers)
 #   fatal    login or permission problem, no point trying more
 #   other    anything else (DETAIL holds the short reason)
 KIND=""; DETAIL=""
@@ -227,7 +227,7 @@ if [ -z "$LOC" ]; then
   echo "for some VM types in some regions. You can ask Azure to raise it in the portal under"
   echo "Quotas > Compute, or open a free support request there. To test other regions only, for example:"
   echo "  REGION=\"westus3 swedencentral\" bash infra/provision-vm.sh"
-  echo "Send this whole screen to your project lead."
+  echo "Share this whole output when asking for help."
   exit 1
 fi
 

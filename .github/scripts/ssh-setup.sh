@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Runs in the pipeline. Prepares SSH so that later steps can simply type
+# Runs in the pipeline. Prepares SSH so that later steps can use
 #   ssh formflow-vm '...'      and      scp file formflow-vm:/opt/formflow/
 #
 # It needs these environment variables. All of them come from GitHub Actions secrets:
 #   VM_HOST              the VM's public IP address
 #   VM_USER              the login name on the VM (azureuser)
 #   VM_SSH_PRIVATE_KEY   the deploy key (the whole private key file, including the BEGIN and END lines)
-#   VM_HOST_FINGERPRINT  the VM's host key fingerprint, like SHA256:8doJ... (stops a fake server taking its place)
+#   VM_HOST_FINGERPRINT  the VM's host key fingerprint, SHA256:<43 characters> (rejects a server that is not the VM)
 # Optional: VM_PORT (default 22)
 set -euo pipefail
 
@@ -22,8 +22,8 @@ need VM_SSH_PRIVATE_KEY
 need VM_HOST_FINGERPRINT
 PORT="${VM_PORT:-22}"
 
-# Secrets are pasted by people. Refuse anything that is not shaped like what it should be,
-# so a stray space or new line can never end up inside the SSH settings file.
+# Secrets are entered by hand, so check their shape: a stray space or new line
+# must never reach the SSH settings file.
 if ! [[ "$VM_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
   echo "::error::VM_HOST must be an IP address or a host name, with nothing else (no space or new line at the end, no http://, no port)."
   exit 1
@@ -56,7 +56,7 @@ if ! ssh-keygen -y -f "$SSH_DIR/deploy_key" >/dev/null 2>&1; then
   exit 1
 fi
 
-# 2. Ask the VM for its host key and compare it with the fingerprint we trust.
+# 2. Ask the VM for its host key and compare it with the trusted fingerprint.
 HOSTKEY_FILE="$(mktemp)"
 trap 'rm -f "$HOSTKEY_FILE"' EXIT
 ssh-keyscan -T 15 -p "$PORT" -t ed25519 "$VM_HOST" > "$HOSTKEY_FILE" 2>/dev/null || true

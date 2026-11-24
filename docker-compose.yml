@@ -22,7 +22,7 @@ services:
   # Tier 2: backend API. No published port. Only the frontend and the database can reach it.
   backend:
     image: ${DOCKERHUB_USER:?DOCKERHUB_USER is not set}/formflow-backend:${IMAGE_TAG:?IMAGE_TAG is not set}
-    # Build for the Intel/AMD chip type (amd64) that the Azure VM uses, even if this Mac has an Apple chip.
+    # Build for linux/amd64, the architecture of the Azure VM, even on an Apple silicon workstation.
     platform: linux/amd64
     build:
       context: ./backend

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke tests for the throwaway copy of the whole stack that runs inside the GitHub runner.
 # Usage:  smoke-test.sh http://localhost:8080 sha-1a2b3c4
-# This is what plays the role of a staging server, at no cost. If any check fails, nothing is pushed or deployed.
+# This copy serves as the staging environment, at no cost. If any check fails, nothing is pushed or deployed.
 set -euo pipefail
 
 BASE="${1:?Usage: smoke-test.sh http://localhost:8080 sha-1a2b3c4}"

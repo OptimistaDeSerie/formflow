@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deletes the whole resource group, which removes the VM, its disk, its public IP and its network.
-# Run it when you have finished your screenshots and demo, so Azure stops charging you.
+# Run it when the project is finished, so that Azure stops billing for these resources.
 set -euo pipefail
 
 RG="${RG:-formflow-rg}"
