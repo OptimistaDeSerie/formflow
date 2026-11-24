@@ -1,46 +1,50 @@
 # Phase 0 Design Worksheet: FormFlow
 
-Project: Dockerized 3-Tier App with Full CI/CD (project for everyone)
+Project: Dockerized 3-Tier App with Full CI/CD
 Group: 5
-Stack: Docker, Docker Compose, Docker Hub, GitHub Actions, Linux VM on Azure
+Tools: Docker, Docker Compose, Docker Hub, GitHub Actions and a Linux VM on Azure
 
-## 1. The contradiction we are solving
+## 1. What the brief is asking for
 
-The brief pulls in two directions. The founder wants changes shipped continuously until demo day. The founder also wants certainty about what is running, a fast way back when a deploy breaks, and no money spent on a second full staging environment.
+The founder wants new features shipped nonstop until the investor demo. The founder also wants to always know which version is running, a quick way back if a deploy breaks, and no money spent on a second staging server. These look like they fight each other, because shipping fast usually means checking less.
 
-Our answer in one line: ship often, but make every release a small, labelled, checked and reversible package.
+My idea is to ship often, but make every release small, labelled, tested and easy to undo. This is how I cover each wish:
 
-| The brief wants | What our design does about it |
+| The brief wants | What I do about it |
 |---|---|
-| Ship often | Pushing to the main branch triggers the whole pipeline automatically. Nobody copies files by hand. |
-| Know exactly what is running | Every image carries an unchangeable tag, and the running app reports its own tag. |
-| Fast way back | Old images stay in Docker Hub, so going back is one command with no rebuild. |
-| No paid staging | The pipeline starts a throwaway copy of the whole stack inside the free GitHub runner and tests it before anything reaches the server. |
+| Ship often | A push to the main branch starts the whole pipeline by itself, so nobody copies files by hand. |
+| Know what is running | Every image has a tag that never changes, and the running app tells me its own tag. |
+| A fast way back | Old images stay on Docker Hub, so going back needs no rebuild. |
+| No paid staging | The pipeline starts a throwaway copy of the whole app inside the free GitHub runner and tests it before anything reaches the VM. |
 
 ## 2.1 Tier boundaries
 
 ![Architecture diagram](architecture.png)
 
-| Container | What lives in it | Who can reach it | Why it is its own container |
+The picture above is drawn from the file architecture.mmd in the same folder.
+
+I split the app into three containers and each one has one job.
+
+| Container | What is inside | Who can reach it | Why it is separate |
 |---|---|---|---|
-| frontend | nginx, the web page, and a rule that forwards /api/ calls to the backend | The internet, on port 80 only | It is the only public entry point. It is small and changes the most often. |
-| backend | The Flask API: input checks, business rules, and the only code that talks to the database | Only the frontend (over frontend_net) | It holds the database login, so it must never face the internet. |
-| db | Postgres 16 and a named volume called db_data | Only the backend (over backend_net) | It holds the data. It has no route to or from the internet at all. |
+| frontend | nginx, the web page, and a rule that passes /api/ calls on to the backend | The internet, on port 80 only | It is the only public entry point. It is small and it is the part I change most. |
+| backend | The Flask API. It checks the input and it is the only code that talks to the database | Only the frontend, over frontend_net | It holds the database login, so it should never face the internet. |
+| db | Postgres 16 and a volume called db_data | Only the backend, over backend_net | It holds the data. It has no route to or from the internet. |
 
-Why not combine them into one container:
+Why I did not put everything in one container:
 
-1. Change one thing without touching the rest. Changing the page text rebuilds only the frontend image. The backend and the data are not touched.
-2. Smaller blast radius. The frontend is not on the same network as the database, so a mistake or attack on the frontend cannot reach the data directly.
-3. Each piece uses the right tool. nginx, Python and Postgres each use their own official base image, and each is updated on its own.
-4. Containers are disposable, data is not. The data lives in the db_data volume, so replacing any container (a deploy or a rollback) never deletes data.
-5. Rollback can be precise. Each tier can be put back to a known version on its own if needed.
+1. I can change one part without touching the others. If I only change the page text, only the frontend image is rebuilt.
+2. It is safer. The frontend and the db are not on the same network, so if someone breaks into the frontend they still cannot reach the data directly.
+3. Each part uses its own official image (nginx, Python, Postgres), so each can be updated on its own.
+4. Containers can be deleted and made again, but data cannot. The data sits in the db_data volume, so a deploy or a rollback never wipes it.
+5. If I ever need to, I can put one tier back to an older version without touching the others.
 
 Networks:
 
-- frontend_net connects frontend and backend.
-- backend_net connects backend and db. It is marked internal, which means Docker gives it no connection to the internet in either direction.
-- The backend is on both networks. The frontend and the database share no network, so they cannot talk to each other.
-- Only the frontend publishes a port to the outside world, and only port 80. The public address is http://VM-IP with nothing after it.
+- frontend_net joins the frontend and the backend.
+- backend_net joins the backend and the db. I marked it internal, so Docker gives it no internet connection in either direction.
+- The backend is on both networks. The frontend and the db share no network, so they cannot talk to each other.
+- Only the frontend publishes a port, and only port 80. The public address is just http://VM-IP with nothing after it.
 
 ## 2.2 Versioning and tagging strategy
 
@@ -51,67 +55,73 @@ Networks:
 <dockerhub-user>/formflow-backend:sha-a1b2c3d
 ```
 
-The tag is the word sha, a dash, and the first 7 characters of the Git commit ID. That commit ID is a fingerprint of the exact code, so the tag points to exactly one version of the code forever.
+The tag is "sha", a dash, then the first 7 characters of the Git commit ID. The commit ID comes from the exact code, so one tag always points to one version of the code.
 
-Rules:
+My rules:
 
 - One commit gives one tag, used on both images, so the frontend and backend versions always match.
-- A tag is never pushed twice. Once sha-a1b2c3d exists, it is never overwritten.
-- The tag latest is never pushed and never deployed. A server told to run "latest" cannot say which version it is running.
-- The tag is baked into each image when it is built. The backend returns it at /api/version and the frontend writes it to /version.txt.
+- I never push the same tag twice. Once sha-a1b2c3d exists I never overwrite it.
+- I never push or deploy the tag latest. If a server is told to run latest, nobody can say which version it is really running.
+- The tag is put inside each image when it is built. The backend returns it at /api/version and the frontend writes it to /version.txt.
 
-### How anyone can tell what is live right now
+### How I can tell what is live
 
-1. In a browser: the footer of the site shows the frontend version and the backend version.
+1. In the browser, the footer of the site shows the frontend version and the backend version.
 2. With one command: `curl http://VM-IP/api/version`
-3. On the server: `docker ps --format 'table {{.Names}}\t{{.Image}}'` shows the full image names with tags.
-4. In the deploy log: `/opt/formflow/deploy-history.log` gets one line per deploy or rollback with the time, the tag, and which pipeline run did it.
+3. On the server: `docker ps --format 'table {{.Names}}\t{{.Image}}'` shows the image names with their tags.
+4. In the deploy log: `/opt/formflow/deploy-history.log` has one line for every deploy or rollback, with the time, the tag and the pipeline run that did it.
 
 ### How a release flows (no staging server)
 
 1. A developer pushes to the main branch.
-2. The pipeline builds both images in the free GitHub runner and tags them sha-xxxxxxx.
-3. The pipeline starts the whole stack inside the runner as a throwaway copy and runs smoke tests: /api/health must return 200, and a form entry must be saved and read back. This copy plays the role of staging and costs nothing.
-4. Only if step 3 passes are the images pushed to Docker Hub.
+2. The pipeline builds both images in the GitHub runner and tags them sha-xxxxxxx.
+3. It starts the whole app inside the runner as a throwaway copy and runs smoke tests. /api/health must return 200, and a form entry must be saved and read back. This copy is my staging and it costs nothing.
+4. Only if the tests pass are the images pushed to Docker Hub.
 5. The pipeline connects to the VM over SSH. It saves the current tag as previous_tag, writes the new tag into the server's .env file, then runs `docker compose pull` and `docker compose up -d`.
-6. The pipeline checks http://VM-IP/api/health and checks that /api/version equals the new tag. It retries for about 60 seconds.
-7. If that check fails, the pipeline rolls back to previous_tag by itself and the pipeline run is marked as failed so the team sees it.
+6. It checks http://VM-IP/api/health and checks that /api/version shows the new tag. It keeps trying for about 60 seconds.
+7. If the check fails, the VM goes back to previous_tag by itself, and the pipeline run is marked as failed so I can see it.
 
 ### Rollback procedure, step by step
 
-Why it is fast and reliable: the old images are still in Docker Hub, so nothing is rebuilt, and the database volume is not touched.
+Rollback is fast because the old images are still on Docker Hub, so nothing has to be rebuilt, and the database volume is not touched.
 
-1. Find the last good tag: `cat /opt/formflow/previous_tag` or read deploy-history.log.
-2. Run the rollback. Either press the manual Rollback workflow in GitHub Actions and type the tag, or log in to the VM and run `/opt/formflow/rollback.sh sha-xxxxxxx`.
+1. Find the last good tag. It is in `/opt/formflow/previous_tag` and in deploy-history.log.
+2. Run the rollback. Either start the Rollback workflow in GitHub Actions and type the tag, or log in to the VM and run `/opt/formflow/rollback.sh sha-xxxxxxx`.
 3. The script writes that tag into .env, then runs `docker compose pull` and `docker compose up -d`.
-4. Verify: `curl http://VM-IP/api/version` shows the old tag, and `curl http://VM-IP/api/health` returns 200.
-5. The script appends a ROLLBACK line to deploy-history.log.
+4. Check it. `curl http://VM-IP/api/version` should show the old tag and `curl http://VM-IP/api/health` should return 200.
+5. The script adds a ROLLBACK line to deploy-history.log.
 
 Automatic or manual:
 
-- Automatic: the health check in step 6 of the release flow fails, so the pipeline rolls back by itself.
-- Manual: a person notices a problem the health check cannot see, for example a wrong label on a button, and starts the Rollback workflow.
+- Automatic: the health check in step 6 of the release flow fails, so the VM rolls back by itself.
+- Manual: a person sees something the health check cannot see, for example a wrong label on a button, and starts the Rollback workflow.
 
 ### The database rule that keeps rollback safe
 
-Database changes may only add things (a new table or column). They must never rename or delete something the older code still uses. The app today only runs CREATE TABLE IF NOT EXISTS. If this rule is broken, an old version could crash against a newer database, so any destructive change needs its own planned migration and cannot go out as a normal release.
+Database changes may only add things, like a new table or column. They must never rename or delete something the older code still uses. Right now the app only runs CREATE TABLE IF NOT EXISTS. If I broke this rule, an old version could crash against a newer database. So a destructive change needs its own planned migration and cannot go out as a normal release.
 
 ## 2.3 Secrets handling plan
 
 | Secret | Used by | On a developer machine | In GitHub (pipeline) | On the VM |
 |---|---|---|---|---|
 | DB_PASSWORD | db and backend | `.env` file, ignored by git | Actions secret DB_PASSWORD | `/opt/formflow/.env`, permissions 600, written by the pipeline at deploy time |
-| DOCKERHUB_TOKEN (an access token, not the account password) | Pipeline, to push images | Not needed | Actions secret DOCKERHUB_TOKEN | Not stored. Images are public and hold no secrets, so the VM pulls without logging in |
+| DOCKERHUB_TOKEN (an access token, not the account password) | Pipeline, to push images | Not needed | Actions secret DOCKERHUB_TOKEN | Not stored. The images are public and have no secrets in them, so the VM pulls without logging in |
 | DOCKERHUB_USERNAME | Naming the images | `.env` file | Actions secret DOCKERHUB_USERNAME | In `.env` as DOCKERHUB_USER |
-| VM_SSH_PRIVATE_KEY (a key made only for deployments) | Pipeline, to log in to the VM | Not needed | Actions secret VM_SSH_PRIVATE_KEY | The matching public half sits in authorized_keys |
+| VM_SSH_PRIVATE_KEY (a key made only for deployments) | Pipeline, to log in to the VM | Not needed | Actions secret VM_SSH_PRIVATE_KEY | The matching public half is in authorized_keys |
 | VM_HOST and VM_USER | Pipeline, to find the VM | Not needed | Actions secrets VM_HOST and VM_USER | Not applicable |
 
-Settings that are not secret (DB_NAME, DB_USER, HTTP_PORT) also live in `.env` so there is one place to change them.
+Settings that are not secret (DB_NAME, DB_USER, HTTP_PORT) are also in `.env`, so there is one place to change them.
 
-Statement: no secret is hardcoded in any Dockerfile, in docker-compose.yml, in the application code, or in the workflow files, and none is committed to the repository. The repository contains only `.env.example`, which holds placeholder words. The real `.env` is listed in `.gitignore`. docker-compose.yml refuses to start if a required value is missing, so a forgotten secret fails loudly and is never replaced by a quiet default.
+None of these secrets is hardcoded in any Dockerfile, in docker-compose.yml, in the application code or in the workflow files, and none is committed to the repository. The repository only has `.env.example`, which has placeholder words. The real `.env` is listed in `.gitignore`. docker-compose.yml refuses to start if a needed value is missing, so a forgotten secret fails loudly and is never replaced by a quiet default.
 
-If a secret is ever committed by mistake, deleting it from the file is not enough. It must be changed (rotated) straight away, because it stays visible in the repository history.
+If a secret is ever committed by mistake, deleting it from the file is not enough. I would have to change it straight away, because it stays visible in the repository history.
 
 ## Notes where the build differs from this worksheet
 
-None yet. Any difference found during the build gets a one-line note here with the reason.
+1. The first push to Docker Hub (sha-c43eb34) was done by hand, because the brief asks for it before the pipeline exists, and since then only the pipeline pushes images.
+2. The VM runs docker-compose.prod.yml, which only pulls images, because the VM has no source code to build from and that is normal for a server.
+3. deploy.sh (and so rollback.sh) pulls the images before it writes the new tag into .env, so a tag missing from Docker Hub changes nothing on the server, which only makes release step 5 and rollback step 3 safer.
+4. The pipeline does not rewrite .env on every deploy. It only writes one if none exists and otherwise checks that the DB_PASSWORD secret matches, because Postgres keeps the password it first started with and a changed one would lock the backend out of its own database.
+5. I added a 7th secret, VM_HOST_FINGERPRINT, so the pipeline can check it is talking to my real VM, which is safer than switching host key checking off.
+6. Port 22 (SSH) is open next to port 80, with key login only, because the GitHub runner has no fixed IP address that I could allow.
+7. The VM is in West US 3 and is a Standard_D2ads_v6, because my new Azure subscription had no quota for the cheaper sizes in the other regions I tried, and this does not change the design.
