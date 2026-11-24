@@ -1,0 +1,191 @@
+name: CI/CD
+
+# Runs on every push to main, and can also be started by hand from the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One release at a time. A second run waits for the first instead of cutting it in half.
+concurrency:
+  group: formflow-deploy
+  cancel-in-progress: false
+
+# The pipeline only needs to read the code. Docker Hub and the VM have their own secrets.
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1. Build both images, start the WHOLE app as a throwaway copy, test it,
+  # and only if every test passes push the images to Docker Hub.
+  # ---------------------------------------------------------------------------
+  build-test-push:
+    name: 1. Build, test, push
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v5
+
+      - name: Check that all 7 secrets exist
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          VM_HOST_FINGERPRINT: ${{ secrets.VM_HOST_FINGERPRINT }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: bash .github/scripts/check-secrets.sh
+
+      - name: Work out the version tag and the test settings
+        id: tag
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          TAG="sha-${GITHUB_SHA::7}"
+          if ! [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9]{4,30}$ ]]; then
+            echo "::error::DOCKERHUB_USERNAME must be your Docker ID: 4 to 30 lowercase letters and numbers."
+            exit 1
+          fi
+          # A random password that exists only inside this run. It has nothing to do with the real one on the VM.
+          TEST_PW="$(openssl rand -hex 12)"
+          echo "::add-mask::$TEST_PW"
+          {
+            echo "IMAGE_TAG=$TAG"
+            echo "DOCKERHUB_USER=$DOCKERHUB_USERNAME"
+            echo "DB_NAME=formflow"
+            echo "DB_USER=formflow"
+            echo "DB_PASSWORD=$TEST_PW"
+            echo "HTTP_PORT=8080"
+          } >> "$GITHUB_ENV"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Version tag for this run: $TAG"
+
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Build both images
+        run: docker compose build
+
+      - name: Start the whole app (throwaway copy)
+        run: docker compose up -d --wait --wait-timeout 180
+
+      - name: Smoke tests
+        run: bash .github/scripts/smoke-test.sh "http://localhost:$HTTP_PORT" "$IMAGE_TAG"
+
+      - name: Show container logs (only if something failed)
+        if: failure() && steps.tag.outcome == 'success'
+        run: docker compose logs --no-color --tail=100
+
+      - name: Remove the throwaway copy
+        if: always() && steps.tag.outcome == 'success'
+        run: docker compose down --volumes --remove-orphans
+
+      # Reached only if every step above passed. Never runs for a branch other than main.
+      - name: Push the images to Docker Hub
+        if: github.ref == 'refs/heads/main'
+        run: bash .github/scripts/push-images.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### 1. Build, test, push"
+            echo ""
+            echo "- Version tag: \`${IMAGE_TAG:-not worked out}\`"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Job 2. Put that exact version on the VM, check it from the outside,
+  # and go back to the last good version by itself if the check fails.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: 2. Deploy to the VM
+    needs: build-test-push
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TAG: ${{ needs.build-test-push.outputs.tag }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v5
+
+      - name: Check the tag has the right shape
+        run: |
+          if ! [[ "$TAG" =~ ^sha-[0-9a-f]{7}$ ]]; then
+            echo "::error::'$TAG' is not a tag like sha-1a2b3c4. Stopping."
+            exit 1
+          fi
+
+      - name: Set up a safe SSH connection to the VM
+        id: ssh
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          VM_HOST_FINGERPRINT: ${{ secrets.VM_HOST_FINGERPRINT }}
+        run: bash .github/scripts/ssh-setup.sh
+
+      - name: Copy the deploy files to the VM (never the .env)
+        run: |
+          set -euo pipefail
+          scp -q docker-compose.prod.yml deploy/deploy.sh deploy/rollback.sh deploy/make-env.sh deploy/env-sync.sh formflow-vm:/opt/formflow/
+          ssh formflow-vm 'chmod +x /opt/formflow/deploy.sh /opt/formflow/rollback.sh /opt/formflow/make-env.sh /opt/formflow/env-sync.sh'
+          echo "Files copied."
+
+      - name: Check the database password secret matches the VM
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: printf '%s\n%s\n' "$DB_PASSWORD" "$DOCKERHUB_USERNAME" | ssh formflow-vm '/opt/formflow/env-sync.sh'
+
+      - name: Deploy the new version on the VM
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # The values are filled in here on purpose, so the VM receives the final command. TAG was checked above.
+          # shellcheck disable=SC2029
+          ssh formflow-vm "RUN_ID='$RUN_ID' /opt/formflow/deploy.sh '$TAG'"
+
+      - name: Check it from the outside (the public address)
+        id: public
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+        run: bash .github/scripts/public-check.sh "http://$VM_HOST" "$TAG" 60
+
+      # Only if the outside check failed after the VM said it was fine.
+      - name: Go back to the last good version
+        if: failure() && steps.public.outcome == 'failure'
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2029
+          ssh formflow-vm "RUN_ID='$RUN_ID' /opt/formflow/rollback.sh"
+
+      - name: Show the deploy history on the VM
+        if: always() && steps.ssh.outcome == 'success'
+        run: ssh formflow-vm 'tail -n 8 /opt/formflow/deploy-history.log' || true
+
+      - name: Summary
+        if: always()
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### 2. Deploy to the VM"
+            echo ""
+            echo "- Version tag: \`$TAG\`"
+            echo "- Address checked: http://$VM_HOST"
+            echo "- Result: $JOB_STATUS"
+          } >> "$GITHUB_STEP_SUMMARY"

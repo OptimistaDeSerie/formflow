@@ -1,0 +1,102 @@
+name: Rollback
+
+# Started by hand: Actions tab > Rollback > Run workflow.
+# Type a tag like sha-1a2b3c4 to go to that exact version.
+# Leave it empty to go back to the version that was live before the last deploy.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version to go back to, like sha-1a2b3c4. Leave empty for the previous version."
+        required: false
+        default: ""
+        type: string
+
+# Shares the group with the CI/CD workflow, so a rollback never runs at the same moment as a deploy.
+concurrency:
+  group: formflow-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    name: Roll the VM back
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v5
+
+      - name: Check the tag has the right shape
+        env:
+          TARGET: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TARGET" ]; then
+            echo "No tag typed. The VM will use the version saved as previous_tag."
+          elif ! [[ "$TARGET" =~ ^sha-[0-9a-f]{7}$ ]]; then
+            echo "::error::'$TARGET' is not a tag like sha-1a2b3c4 (sha- then 7 letters or numbers 0-9 a-f)."
+            exit 1
+          else
+            echo "Target version: $TARGET"
+          fi
+
+      - name: Set up a safe SSH connection to the VM
+        id: ssh
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          VM_HOST_FINGERPRINT: ${{ secrets.VM_HOST_FINGERPRINT }}
+        run: bash .github/scripts/ssh-setup.sh
+
+      # This uses the rollback.sh that is already on the VM. Nothing is copied or rebuilt,
+      # so a rollback still works even if the newest commit is broken.
+      - name: Roll back on the VM
+        env:
+          TARGET: ${{ inputs.tag }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # The values are filled in here on purpose, so the VM receives the final command. TARGET was checked above.
+          # shellcheck disable=SC2029
+          ssh formflow-vm "RUN_ID='$RUN_ID' /opt/formflow/rollback.sh $TARGET"
+
+      - name: Find out which version is live now
+        id: live
+        run: |
+          set -euo pipefail
+          LIVE="$(ssh formflow-vm "grep -E '^IMAGE_TAG=' /opt/formflow/.env | head -n 1 | cut -d= -f2-")"
+          if ! [[ "$LIVE" =~ ^sha-[0-9a-f]{7}$ ]]; then
+            echo "::error::The VM reports an unexpected live tag: '$LIVE'."
+            exit 1
+          fi
+          echo "live=$LIVE" >> "$GITHUB_OUTPUT"
+          echo "The VM says the live version is $LIVE."
+
+      - name: Check it from the outside (the public address)
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          LIVE: ${{ steps.live.outputs.live }}
+        run: bash .github/scripts/public-check.sh "http://$VM_HOST" "$LIVE" 60
+
+      - name: Show the deploy history on the VM
+        if: always() && steps.ssh.outcome == 'success'
+        run: ssh formflow-vm 'tail -n 8 /opt/formflow/deploy-history.log' || true
+
+      - name: Summary
+        if: always()
+        env:
+          TARGET: ${{ inputs.tag }}
+          LIVE: ${{ steps.live.outputs.live }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Rollback"
+            echo ""
+            echo "- Asked for: \`${TARGET:-previous version}\`"
+            echo "- Live now: \`${LIVE:-unknown}\`"
+            echo "- Result: $JOB_STATUS"
+          } >> "$GITHUB_STEP_SUMMARY"
