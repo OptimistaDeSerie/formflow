@@ -1,0 +1,6 @@
+flowchart LR
+    user["Internet user"] -->|"port 80 (the only open port)"| fe
+    subgraph vm ["Linux VM running Docker Compose"]
+        fe["frontend container<br/>nginx"] -->|"port 5000<br/>frontend_net"| be["backend container<br/>Flask API"]
+        be -->|"port 5432<br/>backend_net (no internet)"| db[("db container<br/>Postgres 16<br/>data in a volume")]
+    end

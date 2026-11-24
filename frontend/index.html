@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FormFlow</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1f2937; }
+    h1 { margin-bottom: 0.25rem; }
+    form { display: grid; gap: 0.75rem; margin: 1.5rem 0; }
+    input, textarea, button { font: inherit; padding: 0.6rem; border: 1px solid #9ca3af; border-radius: 6px; }
+    button { background: #1f3a5f; color: #fff; border: none; cursor: pointer; }
+    #status { min-height: 1.5rem; }
+    ul { list-style: none; padding: 0; }
+    li { border-bottom: 1px solid #e5e7eb; padding: 0.6rem 0; }
+    li small { color: #6b7280; }
+    footer { margin-top: 2rem; font-size: 0.85rem; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <h1>FormFlow</h1>
+  <p>Send us a message. It is stored in the database and shown below.</p>
+
+  <form id="form">
+    <input name="name" placeholder="Your name" maxlength="100" required>
+    <input name="email" type="email" placeholder="Your email" maxlength="200" required>
+    <textarea name="message" placeholder="Your message" rows="3" maxlength="2000" required></textarea>
+    <button type="submit">Send</button>
+  </form>
+  <div id="status"></div>
+
+  <h2>Latest messages</h2>
+  <ul id="list"></ul>
+
+  <footer>
+    Frontend version: <span id="fe-version">...</span> |
+    Backend version: <span id="be-version">...</span>
+  </footer>
+
+  <script>
+    const statusEl = document.getElementById("status");
+
+    async function loadVersions() {
+      try {
+        const fe = await fetch("/version.txt", { cache: "no-store" });
+        document.getElementById("fe-version").textContent = (await fe.text()).trim();
+      } catch (e) { document.getElementById("fe-version").textContent = "unavailable"; }
+      try {
+        const be = await fetch("/api/version", { cache: "no-store" });
+        document.getElementById("be-version").textContent = (await be.json()).version;
+      } catch (e) { document.getElementById("be-version").textContent = "unavailable"; }
+    }
+
+    async function loadList() {
+      const list = document.getElementById("list");
+      list.textContent = "";
+      try {
+        const res = await fetch("/api/submissions", { cache: "no-store" });
+        const rows = await res.json();
+        rows.forEach(r => {
+          const li = document.createElement("li");
+          const strong = document.createElement("strong");
+          strong.textContent = r.name;
+          const small = document.createElement("small");
+          small.textContent = " (" + r.email + ") " + new Date(r.created_at).toLocaleString();
+          const p = document.createElement("div");
+          p.textContent = r.message;
+          li.append(strong, small, p);
+          list.appendChild(li);
+        });
+      } catch (e) {
+        list.textContent = "Could not load messages.";
+      }
+    }
+
+    document.getElementById("form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const form = ev.target;
+      const body = Object.fromEntries(new FormData(form));
+      statusEl.textContent = "Sending...";
+      try {
+        const res = await fetch("/api/submissions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (res.ok) {
+          statusEl.textContent = "Saved.";
+          form.reset();
+          loadList();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          statusEl.textContent = "Error: " + (err.error || res.status);
+        }
+      } catch (e) {
+        statusEl.textContent = "Could not reach the server.";
+      }
+    });
+
+    loadVersions();
+    loadList();
+  </script>
+</body>
+</html>

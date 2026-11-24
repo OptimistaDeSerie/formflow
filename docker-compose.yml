@@ -1,0 +1,75 @@
+name: formflow
+
+services:
+  # Tier 3: database. No published port. Sits on a network with no internet access at all.
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:?DB_NAME is not set. Copy .env.example to .env first.}
+      POSTGRES_USER: ${DB_USER:?DB_USER is not set. Copy .env.example to .env first.}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is not set. Copy .env.example to .env first.}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Tier 2: backend API. No published port. Only the frontend and the database can reach it.
+  backend:
+    image: ${DOCKERHUB_USER:?DOCKERHUB_USER is not set}/formflow-backend:${IMAGE_TAG:?IMAGE_TAG is not set}
+    # Build for the Intel/AMD chip type (amd64) that the Azure VM uses, even if this Mac has an Apple chip.
+    platform: linux/amd64
+    build:
+      context: ./backend
+      args:
+        APP_VERSION: ${IMAGE_TAG}
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - frontend_net
+      - backend_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # Tier 1: frontend. The ONLY service published to the outside world, and only on port 80.
+  frontend:
+    image: ${DOCKERHUB_USER}/formflow-frontend:${IMAGE_TAG}
+    platform: linux/amd64
+    build:
+      context: ./frontend
+      args:
+        APP_VERSION: ${IMAGE_TAG}
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - frontend_net
+
+networks:
+  # Frontend and backend talk here. The database is not on this network.
+  frontend_net:
+  # Backend and database talk here. internal: true means no route to or from the internet.
+  backend_net:
+    internal: true
+
+volumes:
+  db_data:
