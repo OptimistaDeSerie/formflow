@@ -2,7 +2,7 @@
 
 FormFlow is a small three-tier web application (frontend, backend and database) that runs in Docker containers. Its images are published to Docker Hub with versioned tags, and a GitHub Actions pipeline builds, tests, publishes and deploys every change to a Linux virtual machine on Azure. It was built for the capstone project "Dockerized 3-Tier App with Full CI/CD".
 
-While the VM is running, the application is available at http://20.106.75.210 (port 80 only). The Azure resources are deleted after the demonstration, so this address stops working after that.
+While the VM is running, the application is available at http://20.106.75.210 (port 80 only). The address works only while the VM is running. The VM is stopped between work sessions to avoid unnecessary cost, so it is started again before the application is demonstrated or checked.
 
 ## Contents
 
@@ -91,6 +91,8 @@ All settings come from environment variables, which Docker Compose reads from a 
 
 docker-compose.yml stops with a clear message if a required value is missing, so a forgotten setting never falls back to a quiet default.
 
+A variable that is already set in the terminal, for example with `export IMAGE_TAG=...`, takes priority over the same name in `.env`. `unset IMAGE_TAG` removes it for the current terminal window.
+
 ### Secrets
 
 No secret is stored in this repository. The real `.env` file is ignored by git, the pipeline reads its secrets from GitHub, and the VM keeps its `.env` with permissions 600. The secrets plan is in section 2.3 of the [design worksheet](docs/phase0-design-worksheet.md), and the 7 pipeline secrets are listed in section 8.
@@ -129,13 +131,27 @@ Windows (PowerShell):
 Copy-Item .env.example .env
 ```
 
-**Step 3.** Open `.env` in an editor and replace the two placeholder values: `DOCKERHUB_USER` (the Docker ID, in lowercase) and `DB_PASSWORD` (any password with letters and numbers only).
+**Step 3.** Open `.env` in an editor and replace the two placeholder values: `DOCKERHUB_USER` (the Docker ID, in lowercase) and `DB_PASSWORD` (any password with letters and numbers only). Save the file, because Docker Compose reads the saved version.
 
 **Step 4.** Build and start all three services.
 
 ```
 docker compose up --build -d
 ```
+
+If the backend does not become healthy and the database log shows `password authentication failed`, the application was started earlier from another folder on the same computer. Both folders share one database volume, and Postgres keeps the first password it was given. This command shows the database log:
+
+```
+docker compose logs db --tail 20
+```
+
+To fix it, delete the old volume once. This also deletes the messages stored on that computer, which are only test data.
+
+```
+docker compose down -v
+```
+
+Then run step 4 again.
 
 **Step 5.** Open http://localhost in a browser. If port 80 is busy, set `HTTP_PORT=8080` in `.env`, run step 4 again and open http://localhost:8080.
 
